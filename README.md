@@ -66,3 +66,14 @@ Thực hiện riêng cho mỗi ứng dụng gốc và nhân bản cần nhận t
 3. Nếu trạng thái là `unauthorized`, mở khóa điện thoại và chọn **Cho phép**.
 4. Nếu danh sách trống, đổi cáp/cổng USB và kiểm tra driver USB của điện thoại.
 5. Nếu có nhiều thiết bị, ngắt các thiết bị còn lại rồi chạy lại công cụ.
+
+## Ủng hộ ly cà phê ☕
+
+Nếu công cụ hữu ích, bạn có thể ủng hộ mình một ly cà phê.
+
+- **Ngân hàng:** Techcombank
+- **Số tài khoản:** `31080688888888`
+
+## Nhận code tool auto, MMO
+
+Nhận viết các loại tool tự động hóa (auto) và tool MMO theo yêu cầu.
