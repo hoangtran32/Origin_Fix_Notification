@@ -1,0 +1,24 @@
+# Dữ liệu tạo khi sử dụng
+**/backups/
+**/logs/
+**/reports/
+*.log
+
+# Công cụ ADB tải riêng
+/tools/adb.exe
+/tools/AdbWinApi.dll
+/tools/AdbWinUsbApi.dll
+/platform-tools/
+/tools/platform-tools/
+adbkey
+adbkey.pub
+
+# Gói xuất và file tải về
+/dist/
+/Fix_ThongBao_Vivo_OriginOS/
+*.zip
+
+# File của hệ điều hành
+Thumbs.db
+Desktop.ini
+.DS_Store
