@@ -49,9 +49,10 @@ Thực hiện riêng cho mỗi ứng dụng gốc và nhân bản cần nhận t
  * Nếu trạng thái là unauthorized, mở khóa điện thoại và chọn Cho phép.
  * Nếu danh sách trống, đổi cáp/cổng USB và kiểm tra driver USB của điện thoại.
  * Nếu có nhiều thiết bị, ngắt các thiết bị còn lại rồi chạy lại công cụ.
-8. Setting Gmail
+8. Setting email
  * Mở ứng dụng Gmail, nhấn biểu tượng Menu (☰) ở góc trên bên trái, cuộn xuống chọn Cài đặt.
  * Chọn tài khoản Gmail cần nhận thông báo.
+ * Kiểm tra mục Loại hộp thư đến.
  * Tại mục Thông báo, chọn Tất cả email (thay vì chỉ email có mức độ ưu tiên cao).
  * Nhấn vào Thông báo trong hộp thư đến:
    * Tích chọn Thông báo nhãn (chọn Đồng ý nếu có thông báo bật thông báo tài khoản).
