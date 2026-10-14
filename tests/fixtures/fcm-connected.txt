@@ -1,0 +1,9 @@
+SERVICE com.google.android.gms/.gcm.GcmService fixture user=0
+  Client:
+    connected=mtalk.google.com/192.0.2.1,port=5228
+    Heartbeat: alarm
+    Is client connected: true
+    Network Status:
+      Active: Wi-Fi
+    10-09 12:00:00 Disconnected
+    10-09 12:00:01 Connected

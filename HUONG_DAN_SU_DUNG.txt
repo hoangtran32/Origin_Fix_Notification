@@ -1,0 +1,42 @@
+﻿HUONG DAN NHANH - CONG CU THONG BAO VIVO / IQOO ORIGINOS
+=====================================================
+1. Bat USB debugging, cam cap du lieu, mo khoa may va chap nhan Cho phep ADB.
+2. Mo CHAY_CONG_CU_FIX_THONG_BAO.bat (hoac ban ma nguon: tools\...).
+3. Menu 1: Audit chi doc. Menu 2: chon tung app/user, xem de xuat, xac nhan Y.
+   Nhap so 1,3 de chon; A = tat ca; Enter = huy. Khong tu chon tat ca.
+4. Cuoc goi toan man hinh, cua so noi, Google Play Services chon rieng; mac dinh tat.
+5. Nhat ky JSON/TXT luu trong backups truoc khi sua; bao cao trong reports.
+6. Menu 3: chon nhat ky schema 2 de hoan tac; nut 3 lay nhat ky moi nhat con muc
+   chua khoi phuc. Hoan tac nhieu luot theo thu tu moi -> cu.
+7. Menu 4: FCM hien tai; Menu 6: mo cai dat dung app/user; Menu 7: doc lai ho so,
+   chi de xuat phan bi doi. Menu 5: thoat.
+
+NUT CHAY NHANH:
+1_KIEM_TRA_TRANG_THAI.bat    : Audit (chi doc dien thoai).
+2_TOI_UU_THONG_BAO.bat      : Chon app/user va toi uu.
+3_KHOI_PHUC_HOAN_TAC.bat    : Hoan tac nhat ky moi nhat con muc chua khoi phuc.
+4_KIEM_TRA_KET_NOI_FCM.bat  : Chan doan FCM.
+5_KIEM_TRA_AP_DUNG_LAI.bat  : Doc lai ho so, xem va ap dung lai phan bi doi.
+
+CAN KIEM TRA TREN DIEN THOAI:
+- Tu khoi dong/khoi dong lien ket, pin nen cao/khong han che, du lieu nen.
+- Kenh thong bao, man hinh khoa, bieu ngu, Khong lam phien, cai dat trong app.
+- Neu app dang STOPPED: mo dung app/user mot lan roi thu nhan tin lai.
+- Khoa the da nhiem neu may ho tro. Sau reboot, Audit lai truoc khi ap dung lai.
+- Thu truoc/sau: tat man hinh 15-30 phut; Wi-Fi, di dong, chuyen mang; tung user.
+  Ghi gio gui va gio hien thong bao; lay Audit/FCM TRUOC khi mo app.
+
+DOC KET QUA:
+Quet tu dong: user bi ADB tu choi truy cap se duoc canh bao va bo qua; cac user
+co quyen van duoc quet. Audit luu UserScan va UserScanComplete=false (ma thoat 2).
+Neu chi dinh -UserId bi chan, hoac ho so ap dung lai co user bi chan: dung bao loi
+truoc khi sua; khong tu doi user. Neu tat ca user bi chan: khong the quet app.
+Verified = lenh thanh cong va doc lai dung; AlreadySatisfied = da dung, khong sua.
+Skipped = bo qua vi thieu du lieu/khong ho tro; Failed = lenh/xac minh loi.
+Uncertain = da gui lenh nhung chua doc lai duoc; Conflict = trang thai/UID da doi.
+Default la gia tri AppOp thuc, khong duoc suy ra tu loi truy van.
+Doze dung chung package giua cac user; NetPolicy dung chung UID.
+NetPolicy chi mien tru Data Saver tren mang tinh phi, khong cam ket chua socket MQTT.
+FCM Connected chi la trang thai luc doc; thoi gian broadcast khong phai do tre nhan tin.
+Backup cu thieu schema 2 DUOC GIU NGUYEN nhung khong hoan tac tu dong vi thieu nhat ky.
+Cong cu khong cam ket sua 100% cac loi thong bao. Xem README.md de biet CLI va gioi han.

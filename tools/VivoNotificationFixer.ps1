@@ -1,34 +1,25 @@
-<#
+﻿<#
 .SYNOPSIS
-    Vivo OriginOS Notification Master Fixer & Auditor (ADB Edition)
-    Toi uu hoa thong bao, kiem tra, sao luu va hoan tac chinh xac cho Vivo OriginOS.
+    Vivo OriginOS: kiem tra, toi uu co chon loc, xac minh va hoan tac theo nhat ky.
 .DESCRIPTION
-    Ho tro kiem tra chi tiet (Audit), sao luu trang thai goc, toi uu hoa co chon loc,
-    xac minh ket qua thoi gian thuc, va hoan tac chinh xac khong anh huong quyen khac.
+    PowerShell 5.1+. Audit/FCM/PlanOnly chi doc dien thoai. Fix/Reapply/Restore
+    chi ghi khi co trang thai goc va UID hop le. Khong cam ket sua moi loi thong bao.
 #>
-
 [CmdletBinding()]
-param (
-    [switch]$Audit,
-    [switch]$Fix,
-    [switch]$Restore,
-    [switch]$FCMTest,
-    [string]$TargetPackage,
-    [switch]$AdvancedPermissions
+param(
+    [switch]$Audit, [switch]$Fix, [switch]$Restore, [switch]$FCMTest,
+    [string[]]$TargetPackage, [string[]]$UserId, [string]$Serial,
+    [switch]$AdvancedPermissions, [switch]$Calls, [switch]$Overlay,
+    [switch]$IncludeGoogleServices, [switch]$NoPrompt, [switch]$PlanOnly,
+    [switch]$OpenSettings, [switch]$Reapply, [string]$BackupFile
 )
-
-# Thiet lap Encoding UTF-8
+$script:ToolRoot = $PSScriptRoot
+$script:AdbPath = 'adb'
+$script:LastUserScanResults = @()
+if (Test-Path -LiteralPath (Join-Path $PSScriptRoot 'adb.exe')) { $script:AdbPath = Join-Path $PSScriptRoot 'adb.exe' }
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 $OutputEncoding = [System.Text.Encoding]::UTF8
-
-# Dinh vi ADB
-$AdbPath = "adb"
-if (Test-Path "$PSScriptRoot\adb.exe") {
-    $AdbPath = "$PSScriptRoot\adb.exe"
-} elseif (Test-Path "$PSScriptRoot\..\tools\adb.exe") {
-    $AdbPath = "$PSScriptRoot\..\tools\adb.exe"
-}
-
+. (Join-Path $PSScriptRoot 'NotificationState.ps1')
 # Danh muc ung dung muc tieu pho bien
 $KnownAppCatalog = @{
     "com.facebook.orca"         = @{ Name = "Facebook Messenger"; Category = "Nhan tin" }
@@ -74,713 +65,362 @@ $StandbyBucketNames = @{
 }
 
 function Show-Header {
-    Clear-Host
-    Write-Host "================================================================================" -ForegroundColor Cyan
-    Write-Host "   VIVO ORIGINOS NOTIFICATION MASTER FIXER & AUDITOR (ADB CHUYEN NGHIEP)       " -ForegroundColor Yellow
-    Write-Host "   Kiem tra - Sao luu chi tiet - Toi uu co chon loc - Xac minh - Hoan tac an toan" -ForegroundColor Cyan
-    Write-Host "================================================================================" -ForegroundColor Cyan
-    Write-Host ""
+    Write-Host "`n=== VIVO ORIGINOS - KIEM TRA / TOI UU / HOAN TAC ===" -ForegroundColor Cyan
 }
 
-function Check-AdbConnection {
-    $rawLines = @(& $AdbPath devices)
-    $validDevices = @()
-    foreach ($line in $rawLines) {
-        $trimmed = $line.Trim()
-        if ($trimmed -match "^([^\s]+)\s+device$") {
-            $validDevices += $matches[1].Trim()
-        }
+function Select-Device {
+    param([string]$RequestedSerial, [bool]$NonInteractive)
+    $r = Invoke-Adb '' @('devices','-l')
+    if (-not $r.Success) { throw "ADB: $($r.Output)" }
+    $devices = @([regex]::Matches($r.StdOut, '(?m)^(\S+)\s+device(?:\s.*)?$') | ForEach-Object { $_.Groups[1].Value })
+    if ($RequestedSerial) {
+        if ($devices -cnotcontains $RequestedSerial) { throw 'Serial khong ket noi/khong duoc cap phep.' }
+        return $RequestedSerial
     }
-
-    if ($validDevices.Count -eq 0) {
-        Write-Host "[!] KHONG TIM THAY THIET BI KET NOI QUA ADB!" -ForegroundColor Red
-        Write-Host "    Vui long kiem tra:" -ForegroundColor Yellow
-        Write-Host "    1. Cap USB da cam chac chan vao may tinh."
-        Write-Host "    2. Tren dien thoai da bat 'Tuy chon nha phat trien' -> 'Go loi USB' (USB Debugging)."
-        Write-Host "    3. Chon 'Luon cho phep tu may tinh nay' tren man hinh dien thoai neu co popup."
-        Write-Host ""
-        return $null
-    }
-
-    $selectedSerial = $validDevices[0]
-    return $selectedSerial
+    if ($devices.Count -eq 0) { throw 'Khong co thiet bi ADB. Kiem tra cap/driver, USB debugging va popup Cho phep (unauthorized).' }
+    if ($devices.Count -eq 1) { return $devices[0] }
+    if ($NonInteractive) { throw 'Co nhieu dien thoai. Chi dinh -Serial.' }
+    for ($i=0; $i -lt $devices.Count; $i++) { Write-Host "[$($i+1)] $($devices[$i])" }
+    $answer = Read-Host 'Chon dien thoai'
+    $index = 0
+    if (-not [int]::TryParse($answer, [ref]$index) -or $index -lt 1 -or $index -gt $devices.Count) { throw 'Lua chon dien thoai khong hop le.' }
+    return $devices[$index-1]
 }
 
 function Get-DeviceMetadata {
-    param ([string]$Serial)
-    $rawModel = (& $AdbPath -s $Serial shell getprop ro.product.model 2>$null)
-    $rawOs = (& $AdbPath -s $Serial shell getprop ro.build.version.release 2>$null)
-    $rawOrigin = (& $AdbPath -s $Serial shell getprop ro.vivo.os.build.display.id 2>$null)
-    if (-not $rawOrigin) {
-        $rawOrigin = (& $AdbPath -s $Serial shell getprop ro.vivo.os.name 2>$null)
+    param([string]$Serial)
+    $values = @{}
+    foreach ($pair in @(@('Model','ro.product.model'), @('Android','ro.build.version.release'), @('OriginOS','ro.vivo.os.build.display.id'), @('ApiLevel','ro.build.version.sdk'))) {
+        $r = Invoke-Adb $Serial @('shell','getprop',$pair[1])
+        if (-not $r.Success) { throw "Khong doc duoc $($pair[1]): $($r.Output)" }
+        $values[$pair[0]]=$r.StdOut.Trim()
     }
-
-    $model = if ($rawModel) { [string]$rawModel.ToString().Trim() } else { "Vivo Device" }
-    $osVersion = if ($rawOs) { [string]$rawOs.ToString().Trim() } else { "Android" }
-    $funtouch = if ($rawOrigin) { [string]$rawOrigin.ToString().Trim() } else { "OriginOS" }
-
-    return @{
-        Serial    = $Serial
-        Model     = $model
-        Android   = $osVersion
-        OriginOS  = $funtouch
-    }
+    if ($values.ApiLevel -notmatch '^\d+$') { throw 'Khong doc duoc Android API level.' }
+    $values.ApiLevel=[int]$values.ApiLevel; $values.Serial=$Serial
+    return $values
 }
 
 function Get-DeviceUsers {
-    param ([string]$Serial)
-    $users = @()
-    $lines = @(& $AdbPath -s $Serial shell pm list users 2>$null)
-    foreach ($line in $lines) {
-        if ($line -match "UserInfo\{(\d+):([^:]+):") {
-            $users += [PSCustomObject]@{
-                Id   = [int]$matches[1]
-                Name = $matches[2]
-            }
-        }
-    }
-    if ($users.Count -eq 0) {
-        $users += [PSCustomObject]@{ Id = 0; Name = "Owner" }
-    }
+    param([string]$Serial)
+    $r = Invoke-Adb $Serial @('shell','pm','list','users')
+    if (-not $r.Success) { throw "Khong doc duoc user: $($r.Output)" }
+    $users = @([regex]::Matches($r.StdOut, 'UserInfo\{(\d+):([^:]+):') | ForEach-Object { [PSCustomObject]@{ Id=[int]$_.Groups[1].Value; Name=$_.Groups[2].Value } })
+    if ($users.Count -eq 0) { throw 'Danh sach user khong xac dinh; khong tu gia dinh user 0.' }
     return $users
 }
 
-function Get-InstalledTargetPackages {
-    param (
-        [string]$Serial,
-        [array]$Users
-    )
-    $installed = @{}
+function Get-InstalledTargets {
+    param([string]$Serial, [array]$Users, [string[]]$Packages, [int[]]$RequestedUsers)
+    $script:LastUserScanResults = @()
+    $hadPackageFilter=($Packages.Count -gt 0)
+    $Packages=@($Packages | ForEach-Object { $_ -split ',' } | ForEach-Object { $_.Trim() } | Where-Object { $_ } | Select-Object -Unique)
+    if ($hadPackageFilter -and $Packages.Count -eq 0) { throw 'Danh sach package rong/khong hop le.' }
+    foreach ($pkg in $Packages) { if ($pkg -notmatch '^[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z0-9_]+)+$') { throw "Package khong hop le: $pkg" } }
+    foreach ($id in $RequestedUsers) { if ($id -lt 0 -or $Users.Id -notcontains $id) { throw "User khong ton tai: $id" } }
+    $targets = @()
+    $scannedUsers = 0
     foreach ($u in $Users) {
-        $userId = $u.Id
-        $pkgs = @(& $AdbPath -s $Serial shell pm list packages --user $userId 2>$null)
-        foreach ($line in $pkgs) {
-            $pkg = $line.Replace("package:", "").Trim()
-            if ($KnownAppCatalog.ContainsKey($pkg)) {
-                if (-not $installed.ContainsKey($pkg)) {
-                    $installed[$pkg] = @{
-                        Name     = $KnownAppCatalog[$pkg].Name
-                        Category = $KnownAppCatalog[$pkg].Category
-                        Users    = @($userId)
-                    }
-                } else {
-                    if ($installed[$pkg].Users -notcontains $userId) {
-                        $installed[$pkg].Users += $userId
-                    }
-                }
+        if ($RequestedUsers.Count -gt 0 -and $RequestedUsers -notcontains $u.Id) { continue }
+        $r = Invoke-Adb $Serial @('shell','pm','list','packages','--user',"$($u.Id)")
+        if (-not $r.Success) {
+            # Detect the actual denial, not a hard-coded OEM user ID. Other ADB
+            # failures (disconnects, timeouts, unknown errors) must still stop.
+            $denied = $r.Status -eq 'Failed' -and $r.Output -match ('(?im)^\s*(?:Error:\s*)?Shell does not have permission to access user\s+' + $u.Id + '\b')
+            $scanStatus = $r.Status
+            if ($denied) { $scanStatus = 'AccessDenied' }
+            $script:LastUserScanResults += [PSCustomObject]@{ UserId=$u.Id; UserName=$u.Name; Status=$scanStatus; Detail=$r.Output; Query=$r }
+            if ($denied -and $RequestedUsers.Count -eq 0) {
+                Write-Warning "Bo qua user $($u.Id) ($($u.Name)): ADB khong co quyen truy cap. App cua user nay chua duoc kiem tra/toi uu; tiep tuc voi user truy cap duoc."
+                continue
+            }
+            throw "Khong quet duoc app user $($u.Id) ($($u.Name)): $($r.Output)"
+        }
+        $scannedUsers++
+        $script:LastUserScanResults += [PSCustomObject]@{ UserId=$u.Id; UserName=$u.Name; Status='Accessible'; Detail=''; Query=$r }
+        foreach ($line in ($r.StdOut -split '\r?\n')) {
+            if ($line -notmatch '^package:([\w.]+)\s*$') { continue }
+            $pkg=$matches[1]
+            if (($Packages.Count -gt 0 -and $Packages -contains $pkg) -or ($Packages.Count -eq 0 -and $KnownAppCatalog.ContainsKey($pkg))) {
+                $name=$pkg
+                if ($KnownAppCatalog.ContainsKey($pkg)) { $name=$KnownAppCatalog[$pkg].Name }
+                $uid = Get-PackageUid $Serial $u.Id $pkg
+                $targets += [PSCustomObject]@{ Package=$pkg; AppName=$name; UserId=$u.Id; UserName=$u.Name; Uid=$uid.Value; UidStatus=$uid.Status; GoogleOnly=$false }
             }
         }
     }
-    return $installed
-}
-
-function Get-DozeWhitelist {
-    param ([string]$Serial)
-    $raw = @(& $AdbPath -s $Serial shell dumpsys deviceidle whitelist 2>$null)
-    $list = @()
-    foreach ($line in $raw) {
-        if ($line -match "^(?:System|User),([^,]+)") {
-            $list += $matches[1].Trim()
-        } elseif ($line -match "^\s*([a-zA-Z0-9_\.]+)\s*$") {
-            $list += $matches[1].Trim()
+    if ($scannedUsers -eq 0) { throw 'Khong co user nao cho phep ADB quet ung dung. Khong the kiem tra/toi uu app; kiem tra cai dat tren dien thoai.' }
+    foreach ($pkg in $Packages) {
+        if ($targets.Package -notcontains $pkg) {
+            $skipped = @($script:LastUserScanResults | Where-Object { $_.Status -eq 'AccessDenied' } | ForEach-Object { $_.UserId })
+            if ($skipped.Count -gt 0) { throw "Khong tim thay app trong cac user da quet: $pkg. User chua quet do thieu quyen ADB: $($skipped -join ',')." }
+            throw "Khong tim thay app trong pham vi user: $pkg"
         }
     }
-    return $list
+    return @($targets | Sort-Object Package,UserId -Unique)
 }
 
-function Get-AppOpState {
-    param (
-        [string]$Serial,
-        [int]$UserId,
-        [string]$Package,
-        [string]$Op
-    )
-    $out = @(& $AdbPath -s $Serial shell cmd appops get --user $UserId $Package $Op 2>&1)
-    $outStr = [string]($out -join " ")
-    if ($outStr -match "\ballow\b") { return "allow" }
-    if ($outStr -match "\bignore\b") { return "ignore" }
-    if ($outStr -match "\bdeny\b") { return "deny" }
-    if ($outStr -match "\bdefault\b") { return "default" }
-    if ($outStr -match "\bforeground\b") { return "foreground" }
-    return "default"
-}
-
-function Get-StandbyBucket {
-    param (
-        [string]$Serial,
-        [string]$Package
-    )
-    $rawVal = (& $AdbPath -s $Serial shell am get-standby-bucket $Package 2>&1)
-    $val = if ($rawVal) { [string]$rawVal.ToString().Trim() } else { "" }
-    if ($val -match "^\d+$") {
-        return [int]$val
+function Select-Targets {
+    param([array]$Targets)
+    for ($i=0; $i -lt $Targets.Count; $i++) { $t=$Targets[$i]; Write-Host "[$($i+1)] $($t.AppName) [u$($t.UserId): $($t.UserName)] $($t.Package)" }
+    $answer = (Read-Host 'Chon so, vi du 1,3 (A = tat ca; Enter = huy)').Trim()
+    if (-not $answer) { return @() }
+    if ($answer -eq 'A') { return $Targets }
+    $selected=@()
+    foreach ($token in ($answer -split ',')) {
+        $number=0
+        if (-not [int]::TryParse($token.Trim(), [ref]$number) -or $number -lt 1 -or $number -gt $Targets.Count) { throw "So thu tu khong hop le: $token" }
+        $selected += $Targets[$number-1]
     }
-    return -1
+    return @($selected | Sort-Object Package,UserId -Unique)
+}
+
+function Format-State {
+    param($State)
+    if ($State.Status -eq 'Known') { return ($State.Value | ConvertTo-Json -Compress -Depth 4) }
+    return "[$($State.Status)] $($State.Detail)"
 }
 
 function Audit-AppStatus {
-    param (
-        [string]$Serial,
-        [hashtable]$TargetPackages,
-        [array]$Users
-    )
-    Write-Host "[*] DANG THU THAP DU LIEU TRANG THAI HE THONG..." -ForegroundColor Cyan
-    $whitelist = Get-DozeWhitelist -Serial $Serial
-    $report = @()
-
-    foreach ($pkg in ($TargetPackages.Keys | Sort-Object)) {
-        $info = $TargetPackages[$pkg]
-        $inWhitelist = ($whitelist -contains $pkg)
-        $bucket = Get-StandbyBucket -Serial $Serial -Package $pkg
-        $bucketText = $(if ($StandbyBucketNames.ContainsKey($bucket)) { $StandbyBucketNames[$bucket] } else { "Khong xac dinh ($bucket)" })
-
-        foreach ($userId in $info.Users) {
-            $postNotif = Get-AppOpState -Serial $Serial -UserId $userId -Package $pkg -Op "POST_NOTIFICATION"
-            $vibrate   = Get-AppOpState -Serial $Serial -UserId $userId -Package $pkg -Op "VIBRATE"
-            $wakeLock  = Get-AppOpState -Serial $Serial -UserId $userId -Package $pkg -Op "WAKE_LOCK"
-            $fgService = Get-AppOpState -Serial $Serial -UserId $userId -Package $pkg -Op "START_FOREGROUND"
-            $alertWin  = Get-AppOpState -Serial $Serial -UserId $userId -Package $pkg -Op "SYSTEM_ALERT_WINDOW"
-            $fullScreen= Get-AppOpState -Serial $Serial -UserId $userId -Package $pkg -Op "USE_FULL_SCREEN_INTENT"
-            $autoRevoke= Get-AppOpState -Serial $Serial -UserId $userId -Package $pkg -Op "AUTO_REVOKE_PERMISSIONS_IF_UNUSED"
-            $runInBg   = Get-AppOpState -Serial $Serial -UserId $userId -Package $pkg -Op "RUN_IN_BACKGROUND"
-
-            # Danh gia muc do rui ro mat thong bao
-            $risk = "AN TOAN (Tot)"
-            $riskColor = "Green"
-            $issues = @()
-
-            if (-not $inWhitelist) {
-                $issues += "Chua vao Doze Whitelist (De bi ngu dong khi tat man hinh)"
-            }
-            if ($bucket -gt 20) {
-                $issues += "Standby Bucket kem ($bucket) -> Android han che nhan push"
-            }
-            if ($postNotif -ne "allow") {
-                $issues += "POST_NOTIFICATION chua bat ($postNotif)"
-                $risk = "NGUY CO CAO (Mat thong bao)"
-                $riskColor = "Red"
-            } elseif ($issues.Count -gt 0) {
-                $risk = "CAN TOI UU (De bi tre)"
-                $riskColor = "Yellow"
-            }
-
-            $report += [PSCustomObject]@{
-                Package     = $pkg
-                AppName     = $info.Name
-                Category    = $info.Category
-                UserId      = $userId
-                UserType    = $(if ($userId -eq 0) { "Chinh (u0)" } else { "Nhan ban (u$userId)" })
-                InWhitelist = $inWhitelist
-                Bucket      = $bucket
-                BucketText  = $bucketText
-                PostNotif   = $postNotif
-                Vibrate     = $vibrate
-                WakeLock    = $wakeLock
-                FgService   = $fgService
-                AlertWin    = $alertWin
-                FullScreen  = $fullScreen
-                AutoRevoke  = $autoRevoke
-                RunInBg     = $runInBg
-                Risk        = $risk
-                RiskColor   = $riskColor
-                Issues      = $issues
-            }
-        }
+    param([string]$Serial, [array]$Targets, [hashtable]$Metadata)
+    $rows=@()
+    $doze=Get-DozeWhitelist $Serial; $net=Get-NetpolicyWhitelist $Serial
+    $saver=Invoke-Adb $Serial @('shell','cmd','netpolicy','get','restrict-background')
+    $dnd=Invoke-Adb $Serial @('shell','settings','get','global','zen_mode')
+    foreach ($t in $Targets) {
+        $bucket=Get-StandbyBucket $Serial $t.UserId $t.Package
+        $details=Get-PackageDetails $Serial $t.UserId $t.Package $Metadata.ApiLevel
+        $ops=[ordered]@{}
+        foreach ($op in @('POST_NOTIFICATION','RUN_IN_BACKGROUND','RUN_ANY_IN_BACKGROUND','VIBRATE','WAKE_LOCK','START_FOREGROUND','SYSTEM_ALERT_WINDOW','USE_FULL_SCREEN_INTENT','AUTO_REVOKE_PERMISSIONS_IF_UNUSED')) { $ops[$op]=Get-AppOpState $Serial $t.UserId $t.Package $op }
+        $issues=@()
+        if ($details.Status -ne 'Known') { $issues += 'Khong doc duoc trang thai Package/User.' }
+        elseif ($details.Value.Stopped) { $issues += 'APP DANG STOPPED: mo app nay mot lan tren dung user, roi thu nhan tin lai.' }
+        if ($details.Status -eq 'Known' -and $details.Value.Enabled -in @(2,3,4)) { $issues += 'App dang bi tat (disabled); kiem tra tren dien thoai.' }
+        if ($details.Status -eq 'Known' -and $details.Value.Permission.Status -eq 'Known' -and -not $details.Value.Permission.Value.Granted) { $issues += 'Chua cap quyen runtime POST_NOTIFICATIONS.' }
+        if ($ops.POST_NOTIFICATION.Status -eq 'Known' -and $ops.POST_NOTIFICATION.Value -in @('deny','ignore','errored')) { $issues += 'AppOp thong bao dang chan.' }
+        if ($bucket.Status -eq 'Known' -and $bucket.Value -gt 20) { $issues += "Standby bucket dang han che: $($bucket.Value)." }
+        if ($doze.Status -eq 'Known' -and $doze.Value -notcontains $t.Package) { $issues += 'Chua mien tru full Doze.' }
+        $netState=New-State $net.Status ($net.Value -contains $t.Uid) $net.Detail
+        if ($null -eq $t.Uid) { $netState=New-State 'Unknown' $null 'Thieu UID; khong the xac minh.' }
+        $rows += [PSCustomObject]@{ Package=$t.Package; AppName=$t.AppName; UserId=$t.UserId; UserName=$t.UserName; Uid=$t.Uid; Bucket=$bucket; Doze=(New-State $doze.Status ($doze.Value -contains $t.Package) $doze.Detail); NetPolicy=$netState; Details=$details; AppOps=$ops; Issues=$issues }
     }
-
-    return $report
+    [PSCustomObject]@{ Metadata=$Metadata; CapturedAt=(Get-Date).ToString('o'); UserScan=@($script:LastUserScanResults); UserScanComplete=(@($script:LastUserScanResults | Where-Object { $_.Status -ne 'Accessible' }).Count -eq 0); DataSaver=$saver; Dnd=$dnd; Apps=$rows; DeliveryTest='Chua kiem chung nhan tin nen'; ManualChecks=@('Tu khoi dong/khoi dong lien ket','Pin nen cao/khong han che','Kenh thong bao, man hinh khoa, bieu ngu','Thong bao trong app/tung cuoc tro chuyen','Thu Wi-Fi, di dong, chuyen mang va sau reboot') }
 }
 
 function Show-AuditReport {
-    param ([array]$AuditResults)
-    Write-Host ""
-    Write-Host "=================== KET QUA KIEM TRA TRANG THAI THONG BAO ===================" -ForegroundColor Yellow
-    Write-Host "Tong so ung dung phat hien: $($AuditResults.Count)" -ForegroundColor Cyan
-    Write-Host ""
-
-    foreach ($item in $AuditResults) {
-        Write-Host "[$($item.UserType)] " -NoNewline -ForegroundColor Cyan
-        Write-Host "$($item.AppName) " -NoNewline -ForegroundColor White
-        Write-Host "($($item.Package))" -ForegroundColor Gray
-
-        Write-Host "  - Trang thai: " -NoNewline
-        Write-Host "$($item.Risk)" -ForegroundColor $item.RiskColor
-
-        Write-Host "  - Doze Whitelist: " -NoNewline
-        if ($item.InWhitelist) {
-            Write-Host "DA BAT (Khong bi ngu dong)" -ForegroundColor Green
-        } else {
-            Write-Host "CHUA BAT (Bi han che pin)" -ForegroundColor Red
-        }
-
-        Write-Host "  - Standby Bucket: " -NoNewline
-        if ($item.Bucket -eq 10) {
-            Write-Host "$($item.BucketText)" -ForegroundColor Green
-        } else {
-            Write-Host "$($item.BucketText)" -ForegroundColor Red
-        }
-
-        Write-Host "  - Quyen thong bao (POST_NOTIFICATION): " -NoNewline
-        if ($item.PostNotif -eq "allow") {
-            Write-Host "$($item.PostNotif)" -ForegroundColor Green
-        } else {
-            Write-Host "$($item.PostNotif)" -ForegroundColor Red
-        }
-
-        Write-Host "  - Cua so noi (Pop-up/Bong bong): " -NoNewline
-        Write-Host "$($item.AlertWin)" -ForegroundColor Gray
-
-        Write-Host "  - Cuoc goi toan man hinh (VoIP): " -NoNewline
-        Write-Host "$($item.FullScreen)" -ForegroundColor Gray
-
-        if ($item.Issues.Count -gt 0) {
-            Write-Host "  * Cac diem can khac phuc:" -ForegroundColor Yellow
-            foreach ($iss in $item.Issues) {
-                Write-Host "    + $iss" -ForegroundColor Yellow
-            }
-        }
-        Write-Host "--------------------------------------------------------------------------------" -ForegroundColor DarkGray
+    param($Report)
+    foreach ($scan in $Report.UserScan) {
+        if ($scan.Status -ne 'Accessible') { Write-Host "[CHUA KIEM TRA] User $($scan.UserId) ($($scan.UserName)): $($scan.Detail)" -ForegroundColor Yellow }
     }
+    Write-Host "Data Saver: $($Report.DataSaver.Output) | Khong lam phien (zen_mode): $($Report.Dnd.Output)"
+    Write-Host 'NetPolicy la mien tru Data Saver tren mang tinh phi; chua chung minh sua duoc socket MQTT.' -ForegroundColor Yellow
+    foreach ($r in $Report.Apps) {
+        Write-Host "`n$($r.AppName) [u$($r.UserId): $($r.UserName)] UID=$($r.Uid)" -ForegroundColor Cyan
+        Write-Host "  Doze: $(Format-State $r.Doze) | Bucket: $(Format-State $r.Bucket) | NetPolicy: $(Format-State $r.NetPolicy)"
+        if ($r.Details.Status -eq 'Known') { Write-Host "  POST_NOTIFICATIONS: $(Format-State $r.Details.Value.Permission) | Stopped=$($r.Details.Value.Stopped)" }
+        foreach ($op in $r.AppOps.Keys) { Write-Host "  $op : $(Format-State $r.AppOps[$op])" }
+        foreach ($issue in $r.Issues) { Write-Host "  [CAN KIEM TRA] $issue" -ForegroundColor Yellow }
+    }
+    Write-Host "`nNhan tin nen: $($Report.DeliveryTest). Kenh thong bao va cai dat OriginOS can kiem tra tren may."
 }
 
-function Create-GranularBackup {
-    param (
-        [string]$Serial,
-        [hashtable]$DeviceMeta,
-        [array]$AuditResults
-    )
-    $backupDir = "$PSScriptRoot\backups"
-    if (-not (Test-Path $backupDir)) {
-        New-Item -ItemType Directory -Path $backupDir -Force | Out-Null
-    }
-
-    $timestamp = (Get-Date).ToString("yyyyMMdd_HHmmss")
-    $jsonPath = "$backupDir\backup_${Serial}_${timestamp}.json"
-    $txtSummaryPath = "$backupDir\backup_${Serial}_${timestamp}.txt"
-
-    $backupData = @{
-        Metadata   = @{
-            Timestamp = (Get-Date).ToString("o")
-            Serial    = $Serial
-            Model     = $DeviceMeta.Model
-            Android   = $DeviceMeta.Android
-            OriginOS  = $DeviceMeta.OriginOS
-        }
-        AppStates  = $AuditResults
-    }
-
-    $jsonContent = $backupData | ConvertTo-Json -Depth 6
-    [System.IO.File]::WriteAllText($jsonPath, $jsonContent, [System.Text.Encoding]::UTF8)
-
-    # Tao file summary de doc
-    $sb = New-Object System.Text.StringBuilder
-    [void]$sb.AppendLine("BAN SAO LUU TRANG THAI GOC TRUOC KHI TOI UU")
-    [void]$sb.AppendLine("Thiet bi: $($DeviceMeta.Model) ($Serial)")
-    [void]$sb.AppendLine("Thoi gian: $(Get-Date)")
-    [void]$sb.AppendLine("--------------------------------------------------")
-    foreach ($r in $AuditResults) {
-        [void]$sb.AppendLine("[$($r.UserType)] $($r.AppName) ($($r.Package))")
-        [void]$sb.AppendLine("  Doze Whitelist: $($r.InWhitelist)")
-        [void]$sb.AppendLine("  Standby Bucket: $($r.Bucket)")
-        [void]$sb.AppendLine("  POST_NOTIFICATION: $($r.PostNotif)")
-        [void]$sb.AppendLine("  VIBRATE: $($r.Vibrate)")
-        [void]$sb.AppendLine("  WAKE_LOCK: $($r.WakeLock)")
-        [void]$sb.AppendLine("  START_FOREGROUND: $($r.FgService)")
-        [void]$sb.AppendLine("  SYSTEM_ALERT_WINDOW: $($r.AlertWin)")
-        [void]$sb.AppendLine("  USE_FULL_SCREEN_INTENT: $($r.FullScreen)")
-        [void]$sb.AppendLine("  AUTO_REVOKE: $($r.AutoRevoke)")
-        [void]$sb.AppendLine("  RUN_IN_BACKGROUND: $($r.RunInBg)")
-        [void]$sb.AppendLine("")
-    }
-    [System.IO.File]::WriteAllText($txtSummaryPath, $sb.ToString(), [System.Text.Encoding]::UTF8)
-
-    Write-Host "[OK] DA TAO BAN SAO LUU GOC AN TOAN TAI:" -ForegroundColor Green
-    Write-Host "    $jsonPath" -ForegroundColor Cyan
-    return $jsonPath
+function Save-Report {
+    param([string]$Serial, [string]$Kind, $Data)
+    $safeSerial=$Serial -replace '[^\w.-]', '_'
+    $path=Join-Path $script:ToolRoot ('reports\' + $Kind + '_' + $safeSerial + '_' + (Get-Date -Format 'yyyyMMdd_HHmmss_fff') + '.json')
+    Save-JsonAtomic $path $Data
+    Write-Host "Bao cao: $path" -ForegroundColor Cyan
 }
 
-function Apply-GranularOptimization {
-    param (
-        [string]$Serial,
-        [array]$SelectedApps,
-        [bool]$IncludeAdvanced
-    )
-    Write-Host ""
-    Write-Host "=================== TIEN HANH TOI UU HOA CO XAC MINH ===================" -ForegroundColor Yellow
-    $modeText = $(if ($IncludeAdvanced) { "BAT" } else { "TAT (Chi toi uu quyen chuan)" })
-    Write-Host "Tuy chon quyen bo sung (Cua so noi, Full screen intent...): $modeText" -ForegroundColor Cyan
-    Write-Host ""
-
-    # 1. Kich hoat ket noi Google Play Services FCM Heartbeat
-    Write-Host "[1/3] Kich hoat va giu ket noi Google Play Services (FCM Heartbeat)..." -ForegroundColor Cyan
-    & $AdbPath -s $Serial shell dumpsys deviceidle whitelist +com.google.android.gms 2>&1 | Out-Null
-    & $AdbPath -s $Serial shell am set-standby-bucket com.google.android.gms 10 2>&1 | Out-Null
-    & $AdbPath -s $Serial shell am broadcast -a com.google.android.intent.action.MCS_HEARTBEAT -p com.google.android.gms 2>&1 | Out-Null
-    Write-Host "    [OK] Google Play Services FCM Heartbeat da duoc kich hoat." -ForegroundColor Green
-
-    # 2. Toi uu tung ung dung
-    Write-Host ""
-    Write-Host "[2/3] Ap dung cac thiet lap cho tung ung dung muc tieu..." -ForegroundColor Cyan
-
-    $results = @()
-
-    foreach ($item in $SelectedApps) {
-        $pkg = $item.Package
-        $userId = $item.UserId
-        $appName = $item.AppName
-        $userTag = "u$userId"
-
-        Write-Host "--> Dang xu ly: $appName ($pkg) [$userTag]..." -ForegroundColor White
-
-        # A. Doze Whitelist (He thong dung chung package)
-        & $AdbPath -s $Serial shell dumpsys deviceidle whitelist +$pkg 2>&1 | Out-Null
-
-        # B. Standby Bucket = 10 (ACTIVE)
-        & $AdbPath -s $Serial shell am set-standby-bucket $pkg 10 2>&1 | Out-Null
-
-        # C. Quyen thong bao co ban
-        & $AdbPath -s $Serial shell cmd appops set --user $userId $pkg POST_NOTIFICATION allow 2>&1 | Out-Null
-        & $AdbPath -s $Serial shell cmd appops set --user $userId $pkg VIBRATE allow 2>&1 | Out-Null
-
-        # D. Kiem tra truoc WAKE_LOCK va START_FOREGROUND (Tranh chay thua neu Android 14 da la allow)
-        $currWakeLock = Get-AppOpState -Serial $Serial -UserId $userId -Package $pkg -Op "WAKE_LOCK"
-        if ($currWakeLock -ne "allow") {
-            & $AdbPath -s $Serial shell cmd appops set --user $userId $pkg WAKE_LOCK allow 2>&1 | Out-Null
-        }
-
-        $currFg = Get-AppOpState -Serial $Serial -UserId $userId -Package $pkg -Op "START_FOREGROUND"
-        if ($currFg -ne "allow") {
-            & $AdbPath -s $Serial shell cmd appops set --user $userId $pkg START_FOREGROUND allow 2>&1 | Out-Null
-        }
-
-        # E. Quyen nang cao (Tuy chon)
-        if ($IncludeAdvanced) {
-            & $AdbPath -s $Serial shell cmd appops set --user $userId $pkg SYSTEM_ALERT_WINDOW allow 2>&1 | Out-Null
-            & $AdbPath -s $Serial shell cmd appops set --user $userId $pkg USE_FULL_SCREEN_INTENT allow 2>&1 | Out-Null
-            & $AdbPath -s $Serial shell cmd appops set --user $userId $pkg AUTO_REVOKE_PERMISSIONS_IF_UNUSED ignore 2>&1 | Out-Null
-            & $AdbPath -s $Serial shell cmd appops set --user $userId $pkg RUN_IN_BACKGROUND allow 2>&1 | Out-Null
-            & $AdbPath -s $Serial shell cmd appops set --user $userId $pkg RUN_ANY_IN_BACKGROUND allow 2>&1 | Out-Null
-        }
-
-        # 3. XAC MINH LAI NGAY LAP TUC (Verification)
-        $verifyWhitelist = (Get-DozeWhitelist -Serial $Serial) -contains $pkg
-        $verifyBucket    = Get-StandbyBucket -Serial $Serial -Package $pkg
-        $verifyNotif     = Get-AppOpState -Serial $Serial -UserId $userId -Package $pkg -Op "POST_NOTIFICATION"
-
-        $isSuccess = ($verifyWhitelist -and ($verifyBucket -eq 10 -or $verifyBucket -eq 5) -and $verifyNotif -eq "allow")
-
-        if ($isSuccess) {
-            $bName = $(if ($verifyBucket -eq 5) { "EXEMPTED (5)" } else { "ACTIVE (10)" })
-            Write-Host "    [OK XAC MINH THANH CONG] Whitelist: OK | Bucket: $bName | POST_NOTIF: allow" -ForegroundColor Green
-        } else {
-            Write-Host "    [!] CANH BAO: Whitelist=$verifyWhitelist, Bucket=$verifyBucket, Notif=$verifyNotif" -ForegroundColor Yellow
-        }
-
-        $results += [PSCustomObject]@{
-            Package   = $pkg
-            AppName   = $appName
-            UserId    = $userId
-            Success   = $isSuccess
-            Whitelist = $verifyWhitelist
-            Bucket    = $verifyBucket
-            Notif     = $verifyNotif
-        }
+function Show-ChangePlan {
+    param([array]$Plan)
+    Write-Host "`n=== THAY DOI DE XUAT ===" -ForegroundColor Cyan
+    foreach ($e in $Plan) {
+        Write-Host "[$($e.Status)] $($e.Package) [u$($e.UserId)] $($e.Kind) $($e.Op): $($e.Before | ConvertTo-Json -Compress) -> $($e.Desired | ConvertTo-Json -Compress) $($e.Detail)"
     }
-
-    Write-Host ""
-    Write-Host "[3/3] HOAN TAT QUA TRINH TOI UU HOA VA XAC MINH!" -ForegroundColor Green
-    return $results
+    Write-Host 'Doze dung chung package cho cac user; NetPolicy dung chung UID. Quyen bo sung chi ap dung khi da chon.' -ForegroundColor Yellow
 }
 
-function Restore-FromGranularBackup {
-    param (
-        [string]$Serial,
-        [string]$BackupFilePath
-    )
-    if (-not (Test-Path $BackupFilePath)) {
-        Write-Host "[!] Khong tim thay file sao luu: $BackupFilePath" -ForegroundColor Red
-        return
+function Show-ManualGuidance {
+    Write-Host "`nTren OriginOS: bat Tu khoi dong/Khoi dong lien ket, cho phep pin nen cao, khoa the da nhiem neu may ho tro."
+    Write-Host 'Kiem tra kenh thong bao, man hinh khoa, bieu ngu, Khong lam phien va cai dat thong bao ben trong app.'
+    Write-Host 'Sau reboot: kiem tra lai, mo app can nhan tin mot lan neu dang stopped; dung muc 7 de ap dung lai phan bi doi.'
+    Write-Host 'Thu truoc/sau: tat man hinh 15-30 phut; Wi-Fi, di dong, chuyen mang; tung tai khoan goc/nhan ban.'
+    Write-Host 'Ghi gio gui va gio thong bao xuat hien; lay Audit/FCM truoc khi mo app. Thoi gian broadcast FCM khong phai do tre nhan tin.'
+}
+
+function Invoke-FixFlow {
+    param([string]$Serial, [array]$Targets, [hashtable]$Metadata, [bool]$NonInteractive, [bool]$PreviewOnly, [bool]$EnableCalls, [bool]$EnableOverlay, [bool]$Advanced, [bool]$GoogleServices)
+    if ($Targets.Count -eq 0) { throw 'Chua chon app/user.' }
+    foreach ($target in $Targets) {
+        $details=Get-PackageDetails $Serial $target.UserId $target.Package $Metadata.ApiLevel
+        if ($details.Status -ne 'Known') { Write-Host "[CAN KIEM TRA] $($target.Package) [u$($target.UserId)]: khong doc duoc trang thai app." -ForegroundColor Yellow }
+        elseif ($details.Value.Stopped) { Write-Host "[CAN THAO TAC] $($target.Package) [u$($target.UserId)] dang stopped. Mo dung app nay mot lan tren dien thoai, roi thu nhan tin." -ForegroundColor Yellow }
+        if ($details.Status -eq 'Known' -and $details.Value.Enabled -in @(2,3,4)) { Write-Host "[CAN THAO TAC] $($target.Package) [u$($target.UserId)] dang disabled; kiem tra cai dat app." -ForegroundColor Yellow }
     }
-
-    Write-Host ""
-    Write-Host "=================== HOAN TAC CHINH XAC THEO BAN SAO LUU ===================" -ForegroundColor Yellow
-    Write-Host "File sao luu: $BackupFilePath" -ForegroundColor Cyan
-    Write-Host "Luu y: Chi hoan tac dung nhung gi tool da sua. KHONG dung appops reset toan bo." -ForegroundColor Cyan
-    Write-Host ""
-
-    $jsonContent = [System.IO.File]::ReadAllText($BackupFilePath, [System.Text.Encoding]::UTF8)
-    $backupData = $jsonContent | ConvertFrom-Json
-
-    foreach ($item in $backupData.AppStates) {
-        $pkg = $item.Package
-        $userId = $item.UserId
-        $appName = $item.AppName
-        Write-Host "--> Dang hoan tac cho: $appName ($pkg) [u$userId]..." -ForegroundColor White
-
-        # 1. Hoan tac Doze Whitelist: Neu ban dau KHONG o trong whitelist thi go ra
-        if (-not $item.InWhitelist) {
-            & $AdbPath -s $Serial shell dumpsys deviceidle whitelist -$pkg 2>&1 | Out-Null
-        }
-
-        # 2. Hoan tac Standby Bucket: Tra lai bucket ban dau
-        if ($item.Bucket -gt 0) {
-            & $AdbPath -s $Serial shell am set-standby-bucket $pkg $item.Bucket 2>&1 | Out-Null
-        }
-
-        # 3. Hoan tac cac quyen AppOps ve trang thai ban dau
-        $opsToRestore = @{
-            "POST_NOTIFICATION" = $item.PostNotif
-            "VIBRATE"           = $item.Vibrate
-            "WAKE_LOCK"         = $item.WakeLock
-            "START_FOREGROUND"  = $item.FgService
-            "SYSTEM_ALERT_WINDOW"= $item.AlertWin
-            "USE_FULL_SCREEN_INTENT"= $item.FullScreen
-            "AUTO_REVOKE_PERMISSIONS_IF_UNUSED"= $item.AutoRevoke
-            "RUN_IN_BACKGROUND" = $item.RunInBg
-        }
-
-        foreach ($opName in $opsToRestore.Keys) {
-            $origVal = $opsToRestore[$opName]
-            if ($origVal -and $origVal -ne "default") {
-                & $AdbPath -s $Serial shell cmd appops set --user $userId $pkg $opName $origVal 2>&1 | Out-Null
-            }
-        }
-
-        Write-Host "    [OK] Da tra ve trang thai goc." -ForegroundColor Green
+    $plan=@(New-ChangePlan $Serial $Targets $Metadata.ApiLevel $EnableCalls $EnableOverlay $Advanced $GoogleServices)
+    Show-ChangePlan $plan
+    if ($PreviewOnly) { Save-Report $Serial 'plan' $plan; return $true }
+    if (@($plan | Where-Object { $_.Status -eq 'Planned' }).Count -eq 0) {
+        Write-Host 'Khong co thay doi can ap dung; khong tao backup rong.'
+        Save-TargetProfile $Serial $Targets $EnableCalls $EnableOverlay $Advanced $GoogleServices ''
+        Save-Report $Serial 'plan' $plan
+        Show-ManualGuidance
+        return (@($plan | Where-Object { $_.Status -eq 'Skipped' }).Count -eq 0)
     }
+    if (-not $NonInteractive -and (Read-Host 'Ap dung cac thay doi tren? (Y/N, mac dinh N)').Trim() -ne 'Y') { Write-Host 'Da huy.'; return $true }
+    $journal=New-ChangeJournal $Metadata $Targets $plan
+    Write-Host "Sao luu/nhat ky: $($journal.Path)" -ForegroundColor Cyan
+    Invoke-ChangeJournal $Serial $journal.Data $journal.Path $Metadata.ApiLevel
+    Save-TargetProfile $Serial $Targets $EnableCalls $EnableOverlay $Advanced $GoogleServices $journal.Path
+    $verified=@($plan | Where-Object { $_.Status -eq 'Verified' }).Count
+    $bad=@($plan | Where-Object { $_.Status -in @('Skipped','Failed','Uncertain','Conflict') }).Count
+    Write-Host "Da xac minh $verified thay doi; $bad muc chua dat/chua xac dinh."
+    Save-Report $Serial 'fix' $journal.Data
+    Show-ManualGuidance
+    return ($bad -eq 0)
+}
 
-    Write-Host ""
-    Write-Host "[OK] HOAN TAC HOAN TAT THANH CONG! He thong da duoc khoi phuc ve dung ban sao luu." -ForegroundColor Green
+function Save-TargetProfile {
+    param([string]$Serial, [array]$Targets, [bool]$EnableCalls, [bool]$EnableOverlay, [bool]$Advanced, [bool]$GoogleServices, [string]$JournalPath)
+    $path=Join-Path $script:ToolRoot ('backups\profile_' + ($Serial -replace '[^\w.-]', '_') + '.json')
+    $history=@(); $original=$JournalPath
+    if (Test-Path -LiteralPath $path) {
+        $old=Get-Content -LiteralPath $path -Raw -Encoding UTF8 | ConvertFrom-Json
+        if ($old.Serial -ceq $Serial) {
+            $history=@($old.JournalHistory | Where-Object { $_ })
+            if ($old.OriginalJournal) { $original=$old.OriginalJournal }
+        }
+    }
+    if ($JournalPath) { $history += $JournalPath }
+    Save-JsonAtomic $path ([PSCustomObject]@{ Serial=$Serial; Targets=@($Targets | Select-Object Package,UserId); Calls=$EnableCalls; Overlay=$EnableOverlay; Advanced=$Advanced; GoogleServices=$GoogleServices; OriginalJournal=$original; JournalHistory=@($history | Select-Object -Unique) })
+}
+
+function Get-Backups {
+    param([string]$Serial)
+    $dir=Join-Path $script:ToolRoot 'backups'
+    if (-not (Test-Path -LiteralPath $dir)) { return @() }
+    $files=@(Get-ChildItem -LiteralPath $dir -Filter 'backup_*.json' -File | Sort-Object LastWriteTime -Descending)
+    foreach ($file in $files) {
+        try {
+            $data=Get-Content -LiteralPath $file.FullName -Raw -Encoding UTF8 | ConvertFrom-Json
+            if ($data.SchemaVersion -eq 2 -and $data.Metadata.Serial -ceq $Serial -and @($data.Entries | Where-Object { $_.Attempted -and $_.RestoreStatus -ne 'Restored' }).Count -gt 0) { $file }
+        } catch { Write-Warning "Bo qua backup khong doc duoc: $($file.Name)" }
+    }
 }
 
 function Show-FcmDiagnostics {
-    param ([string]$Serial)
-    Write-Host ""
-    Write-Host "=================== CHAN DOAN KET NOI GOOGLE FCM THOI GIAN THUC ===================" -ForegroundColor Yellow
-    Write-Host "[*] Dang doc trang thai ket noi tu Google Play Services (GcmService)..." -ForegroundColor Cyan
+    param([string]$Serial)
+    $r=Invoke-Adb $Serial @('shell','dumpsys','activity','service','com.google.android.gms/.gcm.GcmService')
+    $state='Unknown'
+    if ($r.Success) { $state=Get-FcmConnectionState $r.StdOut }
+    Write-Host "FCM hien tai (khoi Client): $state" -ForegroundColor Cyan
+    $events=@($r.StdOut -split '\r?\n' | Where-Object { $_ -match 'Received|Successful broadcast|No response|Failed to broadcast' } | Select-Object -Last 15)
+    foreach ($line in $events) { Write-Host $line }
+    if (-not $r.Success) { Write-Host "[$($r.Status)] $($r.Output)" -ForegroundColor Yellow }
+    Write-Host 'Connected chi la trang thai luc doc. Thoi gian broadcast khong do do tre tu luc gui den luc hien thong bao.'
+    Write-Host 'Failed to broadcast to stopped app: mo dung app/user mot lan va thu lai. Chua du du lieu de ket luan loi MQTT.'
+    Save-Report $Serial 'fcm' ([PSCustomObject]@{ CapturedAt=(Get-Date).ToString('o'); State=$state; Command=$r; Events=$events })
+    return ($state -ne 'Unknown')
+}
 
-    $dump = & $AdbPath -s $Serial shell dumpsys activity service com.google.android.gms/.gcm.GcmService 2>&1
-    $dumpStr = [string]($dump -join "`n")
+function Open-AppSettings {
+    param([string]$Serial, $Target)
+    $r=Invoke-Adb $Serial @('shell','am','start','--user',"$($Target.UserId)",'-a','android.settings.APP_NOTIFICATION_SETTINGS','--es','android.provider.extra.APP_PACKAGE',$Target.Package)
+    if (-not $r.Success) { $r=Invoke-Adb $Serial @('shell','am','start','--user',"$($Target.UserId)",'-a','android.settings.APPLICATION_DETAILS_SETTINGS','-d',('package:' + $Target.Package)) }
+    if (-not $r.Success) { Write-Host "Khong mo duoc man hinh cai dat [u$($Target.UserId)]: $($r.Output). Mo Cai dat -> Ung dung -> $($Target.AppName) thu cong." -ForegroundColor Yellow }
+    else { Write-Host "Da gui yeu cau mo cai dat $($Target.AppName) [u$($Target.UserId)]. Kiem tra dung user va cac kenh tren dien thoai." }
+    return $r.Success
+}
 
-    # Kiem tra ket noi
-    $isConnected = ($dumpStr -match "Connected to mtalk\.google\.com" -or $dumpStr -match "Is client connected:\s*true" -or $dumpStr -match "Connected\s*$")
-    Write-Host "1. Ket noi toi may chu Google Push (mtalk.google.com:5228): " -NoNewline
-    if ($isConnected) {
-        Write-Host "DA KET NOI (Connected)" -ForegroundColor Green
-    } else {
-        Write-Host "CHUA KET NOI HOAC DANG RECONNECT" -ForegroundColor Red
-    }
+function Invoke-Reapply {
+    param([string]$Serial, [array]$Users, [hashtable]$Metadata, [bool]$NonInteractive, [bool]$PreviewOnly)
+    $path=Join-Path $script:ToolRoot ('backups\profile_' + ($Serial -replace '[^\w.-]', '_') + '.json')
+    if (-not (Test-Path -LiteralPath $path)) { throw 'Chua co ho so ap dung. Hay chon app/user va toi uu truoc.' }
+    $p=Get-Content -LiteralPath $path -Raw -Encoding UTF8 | ConvertFrom-Json
+    if ($p.Serial -cne $Serial) { throw 'Ho so khong dung serial.' }
+    $targets=@()
+    foreach ($pair in $p.Targets) { $targets += @(Get-InstalledTargets $Serial $Users @($pair.Package) @([int]$pair.UserId)) }
+    return Invoke-FixFlow $Serial $targets $Metadata $NonInteractive $PreviewOnly $p.Calls $p.Overlay $p.Advanced $p.GoogleServices
+}
 
-    # Trich xuat cac su kien gan nhat
-    Write-Host ""
-    Write-Host "2. Nhat ky 15 su kien nhan tin FCM gan nhat tren thiet bi:" -ForegroundColor Yellow
-    $eventLines = $dump | Where-Object { $_ -match "Received|Successful broadcast|No response|Failed to broadcast" } | Select-Object -Last 15
-    if ($eventLines) {
-        foreach ($el in $eventLines) {
-            if ($el -match "Successful broadcast") {
-                Write-Host "   $el" -ForegroundColor Green
-            } elseif ($el -match "No response|Failed to broadcast") {
-                Write-Host "   $el" -ForegroundColor Red
-            } else {
-                Write-Host "   $el" -ForegroundColor Cyan
-            }
+function Invoke-Main {
+    $modes=@($Audit,$Fix,$Restore,$FCMTest,$OpenSettings,$Reapply | Where-Object { $_ })
+    if ($modes.Count -gt 1) { throw 'Chi chon mot che do Audit/Fix/Restore/FCMTest/OpenSettings/Reapply.' }
+    if ($PlanOnly -and -not ($Fix -or $Reapply)) { throw '-PlanOnly can -Fix hoac -Reapply.' }
+    if ($NoPrompt -and $modes.Count -eq 0) { throw '-NoPrompt can mot che do cu the.' }
+    if ($BackupFile -and -not $Restore) { throw '-BackupFile can -Restore.' }
+    if (($Restore -or $FCMTest -or $Reapply) -and ($TargetPackage -or $UserId.Count -gt 0)) { throw 'Che do nay khong nhan bo loc app/user. Dung -Fix de chon pham vi moi.' }
+    if ($modes.Count -gt 0 -and -not $Fix -and ($Calls -or $Overlay -or $AdvancedPermissions -or $IncludeGoogleServices)) { throw 'Tuy chon quyen/GoogleServices can -Fix; Reapply dung tuy chon da luu trong ho so.' }
+    $resolvedUsers=@()
+    # Enumerate directly: piping an omitted ($null) UserId creates an empty token.
+    foreach ($value in $UserId) {
+        foreach ($token in ($value -split ',')) {
+            $number=0
+            if (-not [int]::TryParse($token.Trim(),[ref]$number) -or $number -lt 0) { throw "UserId khong hop le: $token" }
+            $resolvedUsers += $number
         }
-    } else {
-        Write-Host "   (Chua co su kien push nao trong phien lam viec nay)" -ForegroundColor Gray
     }
-
-    Write-Host ""
-    Write-Host "=================== LUU Y DAC BIET VE FACEBOOK LIKE/COMMENT ===================" -ForegroundColor Magenta
-    Write-Host "[!] VE DO UU TIEN CUA META/FACEBOOK (FCM PRIORITY):" -ForegroundColor Yellow
-    Write-Host "    - Tin nhan Messenger duoc Facebook gui voi muc uu tien CAO (HIGH PRIORITY)." -ForegroundColor White
-    Write-Host "      -> Thiet bi se nhan va phat chuong/thong bao ngay lap tuc ke ca khi tat man hinh." -ForegroundColor White
-    Write-Host "    - Thong bao Like, Comment, Thong bao nhom cua Facebook thuong gui o muc BINH THUONG (NORMAL PRIORITY)." -ForegroundColor White
-    Write-Host "      -> Theo thiet ke goc cua Android va Google Firebase, cac goi NORMAL se bi gom lai (batched)" -ForegroundColor White
-    Write-Host "         khi may o che do Doze sau va chi hien khi nguoi dung mo sang man hinh hoac het chu ky Doze." -ForegroundColor White
-    Write-Host "    - ADB chi can thiep duoc phia he dieu hanh dien thoai (khong ngu dong, khong giam xung CPU)," -ForegroundColor White
-    Write-Host "      nhung KHONG THE thay doi payload ma may chu Facebook phat ra tu server." -ForegroundColor Yellow
-    Write-Host "================================================================================" -ForegroundColor Magenta
-}
-
-# ==================== MAIN PROGRAM WORKFLOW ====================
-
-Show-Header
-
-# 1. Kiem tra thiet bi
-$serial = Check-AdbConnection
-if (-not $serial) {
-    Write-Host "Nhan Enter de thoat..."
-    Read-Host
-    exit 1
-}
-
-$deviceMeta = Get-DeviceMetadata -Serial $serial
-Write-Host "[+] Phat hien thiet bi: " -NoNewline -ForegroundColor Green
-Write-Host "$($deviceMeta.Model) " -NoNewline -ForegroundColor White
-Write-Host "(Serial: $serial | Android: $($deviceMeta.Android) | $($deviceMeta.OriginOS))" -ForegroundColor Gray
-Write-Host ""
-
-# 2. Quet danh sach Users (Dynamic Detection)
-$users = Get-DeviceUsers -Serial $serial
-Write-Host "[+] Danh sach User tren may: " -NoNewline -ForegroundColor Green
-foreach ($u in $users) {
-    Write-Host "User $($u.Id) ($($u.Name))  " -NoNewline -ForegroundColor Cyan
-}
-Write-Host ""
-
-# 3. Quet ung dung da cai dat
-$targetApps = Get-InstalledTargetPackages -Serial $serial -Users $users
-Write-Host "[+] Tim thay $($targetApps.Keys.Count) ung dung nhan tin/ngan hang trong danh muc tren may." -ForegroundColor Green
-Write-Host ""
-
-# Neu chay voi tham so dong lenh truc tiep
-if ($Audit) {
-    $auditData = Audit-AppStatus -Serial $serial -TargetPackages $targetApps -Users $users
-    Show-AuditReport -AuditResults $auditData
-    exit 0
-}
-
-if ($Restore) {
-    $backupDir = "$PSScriptRoot\backups"
-    $latestBackup = Get-ChildItem -Path $backupDir -Filter "backup_${serial}_*.json" | Sort-Object LastWriteTime -Descending | Select-Object -First 1
-    if ($latestBackup) {
-        Restore-FromGranularBackup -Serial $serial -BackupFilePath $latestBackup.FullName
-    } else {
-        Write-Host "[!] Khong tim thay ban sao luu nao cho thiet bi $serial tai $backupDir" -ForegroundColor Red
+    $deviceSerial=Select-Device $Serial ([bool]$NoPrompt)
+    $meta=Get-DeviceMetadata $deviceSerial
+    Show-Header
+    Write-Host "$($meta.Model) / Android $($meta.Android) / $($meta.OriginOS) / $deviceSerial"
+    if ($FCMTest) { if (Show-FcmDiagnostics $deviceSerial) { return 0 }; return 2 }
+    if ($Restore) {
+        $path=$BackupFile
+        if (-not $path) { $backups=@(Get-Backups $deviceSerial); if ($backups.Count -eq 0) { throw 'Khong co nhat ky schema 2 chua hoan tac cho dien thoai nay. Backup cu van duoc giu nguyen.' }; $path=$backups[0].FullName }
+        if (Restore-FromGranularBackup $deviceSerial $path $meta.ApiLevel) { return 0 }; return 2
     }
-    exit 0
-}
-
-if ($FCMTest) {
-    Show-FcmDiagnostics -Serial $serial
-    exit 0
-}
-
-# ==================== INTERACTIVE MENU ====================
-
-while ($true) {
-    Write-Host "========================== MENU CHUC NANG CHINH ==========================" -ForegroundColor Cyan
-    Write-Host "  1. [KIEM TRA] Chan doan toan dien (Audit Only - Chi doc, khong sua gi)" -ForegroundColor Yellow
-    Write-Host "  2. [TOI UU] Toi uu hoa thong bao (Kiem tra -> Sao luu -> Toi uu -> Xac minh)" -ForegroundColor Green
-    Write-Host "  3. [HOAN TAC] Khoi phuc chinh xac theo ban sao luu (Granular Rollback)" -ForegroundColor Cyan
-    Write-Host "  4. [CHAN DOAN FCM] Kiem tra ket noi Google Push & Log nhan tin truc tiep" -ForegroundColor Magenta
-    Write-Host "  5. Thoat cong cu" -ForegroundColor Gray
-    Write-Host "==========================================================================" -ForegroundColor Cyan
-    $choice = Read-Host "Nhap lua chon cua ban (1-5)"
-
-    switch ($choice) {
-        "1" {
-            $auditData = Audit-AppStatus -Serial $serial -TargetPackages $targetApps -Users $users
-            Show-AuditReport -AuditResults $auditData
-            Write-Host ""
-            Write-Host "Nhan Enter de quay lai Menu..."; Read-Host
-            Show-Header
+    $users=@(Get-DeviceUsers $deviceSerial)
+    if ($Reapply) { if (Invoke-Reapply $deviceSerial $users $meta ([bool]$NoPrompt) ([bool]$PlanOnly)) { return 0 }; return 2 }
+    $targets=@(Get-InstalledTargets $deviceSerial $users $TargetPackage $resolvedUsers)
+    if ($Audit) { $report=Audit-AppStatus $deviceSerial $targets $meta; Show-AuditReport $report; Save-Report $deviceSerial 'audit' $report; if (-not $report.UserScanComplete) { return 2 }; return 0 }
+    if ($OpenSettings) { if ($targets.Count -ne 1) { throw 'Mo cai dat can dung mot -TargetPackage va mot -UserId.' }; if (Open-AppSettings $deviceSerial $targets[0]) { return 0 }; return 2 }
+    if ($Fix) {
+        if (-not $TargetPackage -or $resolvedUsers.Count -eq 0) {
+            if ($NoPrompt) { throw '-Fix -NoPrompt can -TargetPackage va -UserId de chon ro pham vi.' }
+            $targets=@(Select-Targets $targets)
         }
-
-        "2" {
-            # Buoc 1: Kiem tra truoc
-            Write-Host ""
-            Write-Host "[BUOC 1/4] Kiem tra trang thai hien tai..." -ForegroundColor Cyan
-            $auditData = Audit-AppStatus -Serial $serial -TargetPackages $targetApps -Users $users
-
-            # Buoc 2: Tao ban sao luu goc truoc khi sua
-            Write-Host ""
-            Write-Host "[BUOC 2/4] Sao luu trang thai goc..." -ForegroundColor Cyan
-            $backupFile = Create-GranularBackup -Serial $serial -DeviceMeta $deviceMeta -AuditResults $auditData
-
-            # Buoc 3: Lua chon danh sach ung dung can toi uu
-            Write-Host ""
-            Write-Host "[BUOC 3/4] Chon pham vi ung dung can toi uu:" -ForegroundColor Cyan
-            Write-Host "    [A] Toi uu TAT CA cac ung dung da phat hien tren tat ca User (Khuyen dung)" -ForegroundColor Green
-            Write-Host "    [S] Chi toi uu mot so ung dung duoc chon" -ForegroundColor Yellow
-            $scopeChoice = (Read-Host "Chon [A] hoac [S] (Mac dinh la A)").Trim().ToUpper()
-
-            $selectedApps = $auditData
-            if ($scopeChoice -eq "S") {
-                Write-Host ""
-                Write-Host "Danh sach ung dung:" -ForegroundColor Cyan
-                for ($i = 0; $i -lt $auditData.Count; $i++) {
-                    $it = $auditData[$i]
-                    Write-Host "  [$($i+1)] [$($it.UserType)] $($it.AppName) ($($it.Package))"
+        if ($targets.Count -eq 0) { Write-Host 'Da huy.'; return 0 }
+        if (Invoke-FixFlow $deviceSerial $targets $meta ([bool]$NoPrompt) ([bool]$PlanOnly) ([bool]$Calls) ([bool]$Overlay) ([bool]$AdvancedPermissions) ([bool]$IncludeGoogleServices)) { return 0 }; return 2
+    }
+    while ($true) {
+        Write-Host "`n1. Kiem tra (chi doc) | 2. Chon app/user va toi uu | 3. Hoan tac"
+        Write-Host '4. Chan doan FCM | 5. Thoat | 6. Mo cai dat app | 7. Kiem tra/ap dung lai'
+        try {
+            $choice=Read-Host 'Chon 1-7'
+            if ($null -eq $choice) { Write-Host 'Dau vao da dong; thoat menu.'; return 0 }
+            switch ($choice.Trim()) {
+                '1' { $targets=@(Get-InstalledTargets $deviceSerial $users $TargetPackage $resolvedUsers); $report=Audit-AppStatus $deviceSerial $targets $meta; Show-AuditReport $report; Save-Report $deviceSerial 'audit' $report }
+                '2' {
+                    $targets=@(Get-InstalledTargets $deviceSerial $users $TargetPackage $resolvedUsers)
+                    $selected=@(Select-Targets $targets)
+                    if ($selected.Count -eq 0) { continue }
+                    $enableCalls=((Read-Host 'Them cuoc goi toan man hinh? (Y/N, mac dinh N)').Trim() -eq 'Y')
+                    $enableOverlay=((Read-Host 'Them cua so noi/bong bong chat? (Y/N, mac dinh N)').Trim() -eq 'Y')
+                    $enableGoogle=((Read-Host 'Toi uu them Google Play Services? (Y/N, mac dinh N)').Trim() -eq 'Y')
+                    [void](Invoke-FixFlow $deviceSerial $selected $meta $false $false $enableCalls $enableOverlay $false $enableGoogle)
                 }
-                $selectedIndexes = Read-Host "Nhap cac so thu tu muon toi uu (vi du: 1,2,4)"
-                $indices = $selectedIndexes -split "," | ForEach-Object { [int]$_.Trim() - 1 }
-                $selectedApps = @()
-                foreach ($idx in $indices) {
-                    if ($idx -ge 0 -and $idx -lt $auditData.Count) {
-                        $selectedApps += $auditData[$idx]
-                    }
+                '3' {
+                    $backups=@(Get-Backups $deviceSerial)
+                    if ($backups.Count -eq 0) { Write-Host 'Chua co nhat ky schema 2 can hoan tac.'; continue }
+                    for ($i=0; $i -lt $backups.Count; $i++) { Write-Host "[$($i+1)] $($backups[$i].Name)" }
+                    $answer=(Read-Host 'Chon backup (Enter = huy)').Trim(); $n=0
+                    if (-not $answer) { continue }
+                    if (-not [int]::TryParse($answer,[ref]$n) -or $n -lt 1 -or $n -gt $backups.Count) { throw 'So backup khong hop le.' }
+                    [void](Restore-FromGranularBackup $deviceSerial $backups[$n-1].FullName $meta.ApiLevel)
                 }
+                '4' { [void](Show-FcmDiagnostics $deviceSerial) }
+                '5' { return 0 }
+                '6' { $targets=@(Get-InstalledTargets $deviceSerial $users $TargetPackage $resolvedUsers); $selected=@(Select-Targets $targets); foreach ($item in $selected) { [void](Open-AppSettings $deviceSerial $item) } }
+                '7' { [void](Invoke-Reapply $deviceSerial $users $meta $false $false) }
+                default { Write-Host 'Lua chon khong hop le.' }
             }
-
-            # Buoc 4: Tuy chon quyen bo sung
-            Write-Host ""
-            Write-Host "[BUOC 4/4] Cau hinh quyen bo sung:" -ForegroundColor Cyan
-            Write-Host "    - Quyen Co Ban (Doze Whitelist, Active Bucket, Post Notif, Vibrate) luon duoc bat."
-            Write-Host "    - Ban co muon bat them quyen Nang Cao khong?" -ForegroundColor Yellow
-            Write-Host "      (Bao gom: Cua so noi/Bong bong chat, Cuoc goi toan man hinh, Tat tu thu hoi quyen)"
-            $advChoice = (Read-Host "Bat quyen Nang Cao? (Y/N - Mac dinh Y)").Trim().ToUpper()
-            $includeAdv = ($advChoice -ne "N")
-
-            # Tien hanh toi uu hoa
-            $optResults = Apply-GranularOptimization -Serial $serial -SelectedApps $selectedApps -IncludeAdvanced $includeAdv
-
-            Write-Host ""
-            Write-Host "=================== HUONG DAN SU DUNG SAU KHI TOI UU ===================" -ForegroundColor Yellow
-            Write-Host "1. Tren OriginOS: Hay mo cac app can thiet (Messenger, Zalo...) 1 lan sau khi reboot." -ForegroundColor White
-            Write-Host "2. Vao da nhiem (Recent Tasks) -> Vuot the app xuong de KHOA O KHOA." -ForegroundColor White
-            Write-Host "3. Messenger: Neu muon bat pop-up roi tu tren xuong, hay vao Cai dat thong bao -> Bat 'Bieu ngu noi'." -ForegroundColor White
-            Write-Host "========================================================================" -ForegroundColor Yellow
-            Write-Host ""
-            Write-Host "Nhan Enter de quay lai Menu..."; Read-Host
-            Show-Header
-        }
-
-        "3" {
-            $backupDir = "$PSScriptRoot\backups"
-            if (-not (Test-Path $backupDir)) {
-                Write-Host "[!] Chua co ban sao luu nao!" -ForegroundColor Red
-            } else {
-                $backups = Get-ChildItem -Path $backupDir -Filter "backup_${serial}_*.json" | Sort-Object LastWriteTime -Descending
-                if ($backups.Count -eq 0) {
-                    Write-Host "[!] Khong tim thay ban sao luu nao cho thiet bi $serial!" -ForegroundColor Red
-                } else {
-                    Write-Host ""
-                    Write-Host "Danh sach cac ban sao luu co san:" -ForegroundColor Cyan
-                    for ($i = 0; $i -lt $backups.Count; $i++) {
-                        Write-Host "  [$($i+1)] $($backups[$i].Name) ($($backups[$i].LastWriteTime))"
-                    }
-                    $bCount = $backups.Count
-                    $bChoice = Read-Host "Chon ban sao luu de khoi phuc (1-$bCount, mac dinh 1)"
-                    $bIdx = 0
-                    if ($bChoice -match "^\d+$") {
-                        $bIdx = [int]$bChoice - 1
-                    }
-                    if ($bIdx -ge 0 -and $bIdx -lt $backups.Count) {
-                        Restore-FromGranularBackup -Serial $serial -BackupFilePath $backups[$bIdx].FullName
-                    }
-                }
-            }
-            Write-Host ""
-            Write-Host "Nhan Enter de quay lai Menu..."; Read-Host
-            Show-Header
-        }
-
-        "4" {
-            Show-FcmDiagnostics -Serial $serial
-            Write-Host ""
-            Write-Host "Nhan Enter de quay lai Menu..."; Read-Host
-            Show-Header
-        }
-
-        "5" {
-            Write-Host "Tam biet!" -ForegroundColor Green
-            exit 0
-        }
-
-        default {
-            Write-Host "[!] Lua chon khong hop le, vui long nhap tu 1 den 5." -ForegroundColor Red
-            Start-Sleep -Seconds 1
-        }
+        } catch { Write-Host "[LOI] $($_.Exception.Message)" -ForegroundColor Red }
     }
+}
+
+# Dot sourcing exposes the functions to offline tests without connecting to ADB.
+if ($MyInvocation.InvocationName -ne '.') {
+    try { exit (Invoke-Main) }
+    catch { Write-Host "[LOI] $($_.Exception.Message)" -ForegroundColor Red; exit 1 }
 }

@@ -1,71 +1,112 @@
-# Hướng dẫn sử dụng
+﻿# Công cụ thông báo Vivo / iQOO OriginOS
 
-## 1. Chuẩn bị
+Công cụ ADB cho Windows: kiểm tra trạng thái, chọn ứng dụng và user, xem đề xuất, sao lưu từng thay đổi, áp dụng và xác minh, hoàn tác. Mã nguồn chạy trên Windows PowerShell 5.1 trở lên. Tương thích thực tế còn tùy phiên bản Android/OriginOS và quyền ADB của máy.
 
-1. Dùng máy tính Windows có PowerShell.
-2. Nếu chưa có ADB trong `PATH`, tải [SDK Platform-Tools cho Windows](https://developer.android.com/tools/releases/platform-tools), giải nén rồi chép `adb.exe`, `AdbWinApi.dll` và `AdbWinUsbApi.dll` vào thư mục `tools`.
-3. Trên điện thoại, bật **Tùy chọn nhà phát triển → Gỡ lỗi USB**.
-4. Kết nối điện thoại với máy tính bằng cáp USB có truyền dữ liệu.
-5. Mở khóa điện thoại, chọn **Cho phép** khi xuất hiện yêu cầu gỡ lỗi USB.
-6. Chỉ kết nối một điện thoại khi chạy công cụ.
+## 1. Chuẩn bị và chạy nhanh
 
-## 2. Kiểm tra trạng thái
+1. Bật **Tùy chọn nhà phát triển → Gỡ lỗi USB**, cắm cáp dữ liệu, mở khóa và chọn **Cho phép**.
+2. Mở `tools/CHAY_CONG_CU_FIX_THONG_BAO.bat`, hoặc các nút chạy nhanh:
 
-1. Mở thư mục `tools`.
-2. Nhấp đúp `1_KIEM_TRA_TRANG_THAI.bat`.
-3. Kiểm tra tên thiết bị, danh sách user và các ứng dụng được phát hiện.
-4. Đọc kết quả của từng ứng dụng, gồm cả bản gốc và bản nhân bản.
-5. Nhấn Enter khi cửa sổ yêu cầu để kết thúc.
+| Tệp | Tác dụng |
+| --- | --- |
+| `1_KIEM_TRA_TRANG_THAI.bat` | Audit; chỉ đọc điện thoại |
+| `2_TOI_UU_THONG_BAO.bat` | Chọn app/user, xem đề xuất rồi áp dụng |
+| `3_KHOI_PHUC_HOAN_TAC.bat` | Hoàn tác nhật ký mới nhất còn thay đổi chưa khôi phục |
+| `4_KIEM_TRA_KET_NOI_FCM.bat` | Trạng thái FCM hiện tại và sự kiện gần nhất |
+| `5_KIEM_TRA_AP_DUNG_LAI.bat` | Đọc lại hồ sơ đã chọn và đề xuất phần cần áp dụng lại |
 
-## 3. Áp dụng thiết lập
+Nếu thiếu ADB, tải [SDK Platform-Tools cho Windows](https://developer.android.com/tools/releases/platform-tools), chép `adb.exe`, `AdbWinApi.dll`, `AdbWinUsbApi.dll` vào cạnh script hoặc dùng ADB trong `PATH`. Khi có nhiều thiết bị, công cụ yêu cầu chọn đúng máy; CLI tự động cần `-Serial`.
 
-1. Nhấp đúp `tools/CHAY_CONG_CU_FIX_THONG_BAO.bat`.
-2. Nhập `2` tại menu rồi nhấn Enter.
-3. Chờ công cụ tạo bản sao lưu; ghi lại tên file JSON được hiển thị. File JSON và TXT nằm trong `tools/backups`.
-4. Chọn phạm vi:
-   - Nhập `A` để chọn toàn bộ danh sách được phát hiện.
-   - Nhập `S` để chọn từng ứng dụng, sau đó nhập các số thứ tự cách nhau bằng dấu phẩy, ví dụ `1,2,4`. Chọn riêng các dòng của bản gốc và bản nhân bản cần xử lý.
-5. Tại câu hỏi quyền nâng cao, nhập `Y` để áp dụng cả hai quyền chạy nền, cửa sổ nổi, cuộc gọi toàn màn hình và tắt tự thu hồi quyền; nhập `N` để bỏ qua nhóm này. Nhấn Enter không nhập gì tương đương `Y`.
-6. Chờ xử lý xong và đọc kết quả từng ứng dụng.
-7. Nhấn Enter để trở lại menu; nhập `5` để thoát.
+## 2. Chọn đúng ứng dụng và tài khoản
 
-## 4. Thiết lập trên điện thoại
+Menu giữ các mục 1–5, thêm **6: mở cài đặt đúng app/user**, **7: kiểm tra và áp dụng lại hồ sơ**.
 
-Thực hiện riêng cho mỗi ứng dụng gốc và nhân bản cần nhận thông báo:
+Nếu quét tự động gặp `Shell does not have permission to access user ...`, công cụ cảnh báo và bỏ qua user đó, tiếp tục với các user ADB truy cập được. Ví dụ trên máy có user `666` (XSpace User) bị chặn, user `0` và `999` vẫn được quét nếu có quyền. Báo cáo Audit lưu phạm vi trong `UserScan`, đánh dấu `UserScanComplete=false`; đây là kết quả kiểm tra một phần. Không suy ra user bị chặn không có ứng dụng. Khi chỉ định `-UserId` hoặc áp dụng lại hồ sơ có user bị chặn, công cụ dừng báo lỗi trước khi sửa; không tự chuyển sang user khác. Nếu tất cả user đều bị chặn, công cụ báo không thể quét. Lỗi kết nối/timeout và lỗi ADB khác vẫn được báo lỗi.
 
-1. Bật **Tự khởi động** và **Khởi động liên kết** trong phần quyền ứng dụng.
-2. Trong phần quản lý pin, chọn **Cho phép tiêu hao pin nền cao** hoặc **Không hạn chế**, tùy tên mục trên máy.
-3. Cho phép sử dụng dữ liệu di động trong nền; kiểm tra quyền dùng dữ liệu khi bật chế độ tiết kiệm dữ liệu.
-4. Bật thông báo của ứng dụng và các kênh tin nhắn/cuộc gọi cần dùng. Bật hiển thị trên màn hình khóa và biểu ngữ nổi nếu cần.
-5. Kiểm tra cài đặt thông báo bên trong ứng dụng và từng cuộc trò chuyện.
-6. Mở ứng dụng, vào đa nhiệm rồi khóa thẻ ứng dụng bằng tùy chọn ổ khóa.
-7. Sau khi khởi động lại điện thoại, mở các ứng dụng cần nhận thông báo một lần.
-8. Gửi thử tin nhắn mới vào từng tài khoản khi ứng dụng ở nền. Thử tiếp khi màn hình tắt, trên Wi-Fi và 4G/5G.
+1. Chọn **2**, nhập số của từng dòng ứng dụng/user, ví dụ `1,3`. `A` chọn tất cả; Enter hủy. Tên user lấy từ thiết bị; user khác 0 không mặc định bị gọi là bản nhân bản.
+2. Chọn riêng nhu cầu **cuộc gọi toàn màn hình**, **cửa sổ nổi** và **Google Play Services**. Các mục này mặc định tắt.
+3. Đọc từng đề xuất trước khi xác nhận `Y`; Enter mặc định hủy.
+4. Công cụ lưu JSON/TXT vào `backups` cạnh script trước lệnh thay đổi đầu tiên. Báo cáo nằm ở `reports`.
+5. Đọc kết quả xác minh từng mục và hướng dẫn còn phải thao tác trên điện thoại.
 
-## 5. Hoàn tác theo bản sao lưu
+Thiết lập cơ bản gồm full Doze, standby bucket theo user, miễn trừ Data Saver theo UID, quyền thông báo runtime khi Android API ≥ 33 và app đã khai báo quyền, cùng các AppOps liên quan thông báo/chạy nền. Bucket `EXEMPTED (5)` đã có được giữ nguyên. `RUN_IN_BACKGROUND` và `RUN_ANY_IN_BACKGROUND` đều được theo dõi.
 
-1. Giữ file JSON cần dùng trong `tools/backups`; nếu đã chuyển backup ra ngoài, chép lại file trước khi chạy.
-2. Kết nối đúng điện thoại đã tạo bản sao lưu.
-3. Mở `tools/CHAY_CONG_CU_FIX_THONG_BAO.bat`, nhập `3`.
-4. Chọn số thứ tự của bản sao lưu cần dùng rồi nhấn Enter.
-5. Chờ xử lý xong, chạy lại `1_KIEM_TRA_TRANG_THAI.bat` và đối chiếu với bản sao lưu.
+Các miễn trừ có thể tăng pin và dữ liệu nền; chọn những app cần nhận thông báo.
 
-Để dùng ngay bản sao lưu mới nhất của điện thoại đang kết nối, chạy `tools/3_KHOI_PHUC_HOAN_TAC.bat`.
+**Phạm vi dùng chung:** Doze áp dụng theo package cho các user; NetPolicy áp dụng theo UID và có thể ảnh hưởng các app dùng chung UID. Công cụ loại trùng các mục này, kiểm tra UID trước khi sửa và không ghi khi chưa biết trạng thái gốc. AppOps ở cấp UID được báo chưa hỗ trợ tự động để tránh mất phạm vi ban đầu.
 
-## 6. Kiểm tra kết nối Google
+NetPolicy là miễn trừ **Data Saver trên mạng tính phí**, không chứng minh chữa được socket MQTT hoặc mọi tình trạng trễ tin. [Tài liệu Android](https://developer.android.com/develop/connectivity/network-ops/data-saver). Quyền runtime `POST_NOTIFICATIONS` riêng với AppOp và được kiểm tra từ Android 13; việc áp dụng lưu cả trạng thái cấp quyền, flags và AppOp để hoàn tác. [Tài liệu quyền thông báo](https://developer.android.com/develop/ui/compose/notifications/notification-permission).
 
-1. Kết nối điện thoại với máy tính.
-2. Nhấp đúp `tools/4_KIEM_TRA_KET_NOI_FCM.bat`, hoặc chọn `4` trong menu chính.
-3. Đọc trạng thái kết nối và các sự kiện có thời gian ghi nhận.
-4. Khi kiểm tra lỗi mất thông báo, ghi lại giờ gửi tin, ứng dụng, bản gốc/nhân bản, loại mạng và trạng thái màn hình. Lấy kết quả trước khi mở lại ứng dụng đang lỗi.
+## 3. Đọc kết quả và kiểm tra trên máy
 
-## 7. Khi không tìm thấy điện thoại
+- `Verified`: lệnh thành công và đọc lại đúng giá trị đề xuất.
+- `AlreadySatisfied`: đã đúng, không gửi lệnh thay đổi.
+- `Skipped`: trạng thái gốc không đọc được/không hỗ trợ; xem `ReadStatus` và `Detail`.
+- `Failed`: lệnh lỗi hoặc xác minh không khớp.
+- `Uncertain`: đã gửi lệnh nhưng không đọc lại được.
+- `Conflict`: UID hoặc trạng thái đã đổi; công cụ không ghi đè.
 
-1. Kiểm tra cáp, cổng USB, gỡ lỗi USB và yêu cầu cấp phép trên điện thoại.
-2. Nếu đã chép ADB vào `tools`, mở PowerShell tại thư mục đó và chạy `./adb.exe devices`. Nếu dùng ADB trong `PATH`, chạy `adb devices`.
-3. Nếu trạng thái là `unauthorized`, mở khóa điện thoại và chọn **Cho phép**.
-4. Nếu danh sách trống, đổi cáp/cổng USB và kiểm tra driver USB của điện thoại.
-5. Nếu có nhiều thiết bị, ngắt các thiết bị còn lại rồi chạy lại công cụ.
+Audit phân biệt trạng thái quyền, lỗi truy vấn, app `stopped`/disabled, Data Saver và Không làm phiền. `default` là giá trị AppOp thực; không tự coi là lỗi hoặc đã được phép. Thiếu dữ liệu được ghi rõ thay vì báo thành công.
+
+Trên từng app/user, kiểm tra **Tự khởi động**, **Khởi động liên kết**, **Cho phép pin nền cao/Không hạn chế**, dữ liệu nền, các **kênh tin nhắn/cuộc gọi**, màn hình khóa, biểu ngữ, Không làm phiền và cài đặt thông báo trong app/cuộc trò chuyện. Mục 6 gửi yêu cầu mở cài đặt thông báo của đúng user, có màn hình thông tin app dự phòng; nếu OriginOS không hỗ trợ thì làm thủ công.
+
+Nếu app đang `stopped`, mở đúng app/user một lần rồi thử lại. Khóa thẻ đa nhiệm nếu máy hỗ trợ. Sau reboot, Audit lại trước khi dùng mục 7. Các tùy chọn/kênh riêng của OriginOS chưa được tự động sửa hoặc xác minh.
+
+## 4. Hoàn tác và áp dụng lại
+
+Nhật ký **schema 2** lưu từng mục trước/sau, user/UID, trạng thái đọc, kết quả lệnh và xác minh. Ý định được ghi xuống đĩa trước lệnh sửa, nên vẫn có thể nhận diện lệnh đang dở nếu chương trình bị dừng. Hoàn tác chạy ngược thứ tự và chỉ xử lý các mục đã gửi lệnh, gồm thay đổi GMS, runtime permission/flags và AppOps `default`. Không dùng `appops reset`.
+
+Dùng menu **3** để chọn nhật ký, hoặc nút chạy nhanh để lấy nhật ký mới nhất còn mục chưa khôi phục. Serial phải trùng thiết bị. Nếu app bị cài lại làm đổi UID hoặc bạn đã đổi giá trị sau khi chạy tool, công cụ báo xung đột để bạn đối chiếu; không cưỡng ép hoàn tác. Khi đã áp dụng nhiều lượt, hoàn tác từ lượt mới nhất về lượt cũ hơn.
+
+**Backup cũ không có schema 2 vẫn được giữ nguyên, nhưng bị từ chối hoàn tác tự động** vì không ghi nhận mục thực sự đã sửa và không lưu đầy đủ trạng thái ban đầu. Dùng chúng để đối chiếu thủ công; việc tạo backup mới không khôi phục được trạng thái gốc đã thiếu trong backup cũ.
+
+Mục **7** và `5_KIEM_TRA_AP_DUNG_LAI.bat` dùng `backups/profile_<serial>.json`: quét lại đúng các cặp package/user đã chọn, chỉ đề xuất các giá trị bị đổi. Mỗi lần có thay đổi tạo nhật ký riêng; hồ sơ giữ đường dẫn nhật ký đầu tiên và lịch sử các lượt. Không áp dụng lại tự động khi máy khởi động.
+
+## 5. CLI
+
+Chạy từ thư mục dự án bằng PowerShell. Package tùy chỉnh ngoài danh mục cũng dùng được. Danh sách package/user có thể truyền thành chuỗi phân cách bởi dấu phẩy khi gọi `powershell.exe -File`.
+
+Trong bộ ZIP độc lập, script nằm ngay cạnh các tệp BAT: thay `.\tools\VivoNotificationFixer.ps1` trong ví dụ bằng `.\VivoNotificationFixer.ps1`.
+
+```powershell
+# Chỉ đọc, đúng bản nhân bản
+.\tools\VivoNotificationFixer.ps1 -Audit -TargetPackage com.facebook.orca -UserId 999 -NoPrompt
+
+# Xem đề xuất cho cả hai user; không thay đổi điện thoại
+.\tools\VivoNotificationFixer.ps1 -Fix -PlanOnly -TargetPackage com.facebook.orca -UserId '0,999' -NoPrompt
+
+# Áp dụng cơ bản vào user đã chỉ định; -NoPrompt bỏ bước xác nhận
+.\tools\VivoNotificationFixer.ps1 -Fix -TargetPackage com.facebook.orca -UserId 999 -NoPrompt
+
+# Thêm nhu cầu riêng khi cần
+.\tools\VivoNotificationFixer.ps1 -Fix -TargetPackage com.facebook.orca -UserId 999 -Calls -Overlay -IncludeGoogleServices
+
+# Đọc lại hồ sơ và chỉ xem đề xuất
+.\tools\VivoNotificationFixer.ps1 -Reapply -PlanOnly -NoPrompt
+
+# Hoàn tác nhật ký cụ thể
+.\tools\VivoNotificationFixer.ps1 -Restore -BackupFile '.\tools\backups\backup_SERIAL_TIME.json' -NoPrompt
+
+# Mở cài đặt đúng app/user
+.\tools\VivoNotificationFixer.ps1 -OpenSettings -TargetPackage com.facebook.orca -UserId 999
+```
+
+`-AdvancedPermissions` được giữ để tương thích CLI: bật cuộc gọi, cửa sổ nổi và tắt tự thu hồi quyền. Mặc định tắt; chỉ dùng khi cần. `-Fix -NoPrompt` bắt buộc có cả package và user. Chỉ chọn một chế độ mỗi lượt. Mã thoát: `0` hoàn tất chế độ, `1` lỗi đầu vào/kết nối/backup, `2` Audit bỏ qua user không truy cập được, Fix/Restore còn mục chưa đạt hoặc FCM chưa xác định. Mã `0` không chứng minh nhận thông báo nền thành công.
+
+## 6. FCM và bài thử nhận tin
+
+FCM chỉ đọc trường hiện tại trong khối `Client:`. `Disconnected`, dòng `Connected` trong lịch sử và dữ liệu mâu thuẫn không bị nhận nhầm là đang kết nối. Có trạng thái `Connected`, `Disconnected`, `Unknown`; báo cáo giữ thời điểm đọc và đầu ra lệnh.
+
+Để kiểm chứng hiệu quả: thử trước/sau cùng điều kiện, màn hình tắt **15–30 phút**, Wi-Fi, di động và chuyển mạng, riêng từng tài khoản gốc/nhân bản. Ghi giờ gửi và giờ thông báo thật xuất hiện; lấy Audit/FCM trước khi mở app. Thử lại sau reboot. Thời gian `Successful broadcast ... time=...` chỉ đo một bước giao FCM, không đo toàn bộ độ trễ hay chứng minh thông báo đã hiển thị.
+
+## 7. Kiểm thử và đóng gói
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tests\NotificationFixer.Tests.ps1
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tools\Build-Release.ps1
+```
+
+Bộ kiểm thử chạy ADB giả lập trong bộ nhớ, không thay đổi điện thoại. Đóng gói tạo thư mục sạch trong `dist`, chỉ đưa các file cho phép vào ZIP và kiểm tra không có `logs`, `backups`, `reports`. ZIP cũ được lưu trong `dist/previous`; thư mục phát hành tại gốc được cập nhật các file công cụ, giữ dữ liệu người dùng đang có. Không chia sẻ log/backup chứa định danh thiết bị khi chưa kiểm tra.
 
 ## 8. Setting email
 
